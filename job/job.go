@@ -2,6 +2,7 @@ package job
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/coreos/fleet/pkg"
@@ -31,7 +32,9 @@ const (
 	// Machine metadata key in the unit file
 	fleetMachineMetadata = "MachineMetadata"
 	// Require that the unit be scheduled on every machine in the cluster
-	fleetGlobal = "Global"
+	fleetGlobal    = "Global"
+	fleetCPUUnits  = "CPUUnits"
+	fleetMemoryRes = "Memory"
 
 	deprecatedXPrefix          = "X-"
 	deprecatedXConditionPrefix = "X-Condition"
@@ -49,6 +52,8 @@ var validRequirements = pkg.NewUnsafeSet(
 	deprecatedXConditionPrefix+fleetMachineMetadata,
 	fleetMachineMetadata,
 	fleetGlobal,
+	fleetCPUUnits,
+	fleetMemoryRes,
 )
 
 func ParseJobState(s string) (JobState, error) {
@@ -148,6 +153,14 @@ func (u *Unit) RequiredTargetMetadata() map[string]pkg.Set {
 	return j.RequiredTargetMetadata()
 }
 
+func (u *Unit) RequestedCPUUnits() float64 {
+	j := &Job{
+		Name: u.Name,
+		Unit: u.Unit,
+	}
+	return j.RequestedCPUUnits()
+}
+
 // requirements returns all relevant options from the [X-Fleet] section of a unit file.
 // Relevant options are identified with a `X-` prefix in the unit.
 // This prefix is stripped from relevant options before being returned.
@@ -190,6 +203,25 @@ func (j *Job) Conflicts() []string {
 	conflicts = append(conflicts, j.requirements()[deprecatedXPrefix+fleetConflicts]...)
 	conflicts = append(conflicts, j.requirements()[fleetConflicts]...)
 	return conflicts
+}
+
+// NeededMemory returns the memory required for this job.
+func (j *Job) NeededMemory() int {
+	neededMemory, ok := j.requirements()[fleetMemoryRes]
+	if ok && len(neededMemory) > 0 {
+		mem, _ := strconv.Atoi(neededMemory[0])
+		return mem
+	}
+	return 0
+}
+
+func (j *Job) RequestedCPUUnits() float64 {
+	request, ok := j.requirements()[fleetCPUUnits]
+	if ok && len(request) > 0 {
+		units, _ := strconv.ParseFloat(request[0], 64)
+		return units
+	}
+	return 0.1
 }
 
 // Peers returns a list of Job names that must be scheduled to the same

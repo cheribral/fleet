@@ -1,8 +1,12 @@
 package agent
 
 import (
+	"bufio"
 	"fmt"
+	"os"
 	"path"
+	"strconv"
+	"strings"
 
 	"github.com/coreos/fleet/job"
 	"github.com/coreos/fleet/log"
@@ -23,6 +27,14 @@ func NewAgentState(ms *machine.MachineState) *AgentState {
 
 func (as *AgentState) unitScheduled(name string) bool {
 	return as.Units[name] != nil
+}
+
+func (as *AgentState) allocatedCPUUnits() float64 {
+	allocated := float64(0.0)
+	for _, eUnit := range as.Units {
+		allocated += eUnit.RequestedCPUUnits()
+	}
+	return allocated
 }
 
 // hasConflict determines whether there are any known conflicts with the given Unit
@@ -90,6 +102,38 @@ func (as *AgentState) AbleToRun(j *job.Job) (bool, string) {
 
 	if cExists, cJobName := as.hasConflict(j.Name, j.Conflicts()); cExists {
 		return false, fmt.Sprintf("found conflict with locally-scheduled Unit(%s)", cJobName)
+	}
+	memfile, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return false, "Could not read meminfo"
+	}
+	defer memfile.Close()
+	scanner := bufio.NewScanner(memfile)
+	for scanner.Scan() {
+		if strings.Contains(scanner.Text(), "MemAvailable") {
+			mem, _ := strconv.Atoi(strings.Fields(scanner.Text())[1])
+			if mem < j.NeededMemory() {
+				log.Infof(fmt.Sprintf("Not enough memory to run %s.  I am short by %d", j.Name, j.NeededMemory()-mem))
+				return false, "Not enough memory to run unit"
+			}
+		}
+	}
+	cpuinfo, err := os.Open("/proc/cpuinfo")
+	if err != nil {
+		return false, "Could not read cpuinfo"
+	}
+	defer cpuinfo.Close()
+	scanner = bufio.NewScanner(cpuinfo)
+	cpus := float64(0)
+	for scanner.Scan() {
+		if strings.HasPrefix(scanner.Text(), "processor") {
+			cpus += 1
+		}
+	}
+	unallocated := cpus - as.allocatedCPUUnits()
+	if unallocated < j.RequestedCPUUnits() {
+		log.Infof(fmt.Sprintf("Not enough CPUUnits left to allocate for %s, short by %v", j.Name, j.RequestedCPUUnits()-(cpus-as.allocatedCPUUnits())))
+		return false, "Not enough CPU units left to allocate"
 	}
 
 	return true, ""
